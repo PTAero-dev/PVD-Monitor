@@ -821,7 +821,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                                     FI {latestRecord.fixedIncomeActualPct}% • Mix {latestRecord.mixedActualPct}% • Eq {latestRecord.foreignEquityActualPct}%
                                 </div>
                                 <div style={{ fontSize: '0.73rem', color: 'var(--color-text-muted)' }}>
-                                    Target DIY: 20% / 50% / 30% (Eq +{ (latestRecord.foreignEquityActualPct - 30).toFixed(2) }% drift)
+                                    Target DIY: {latestRecord.fixedIncomePlanPct}% / {latestRecord.mixedPlanPct}% / {latestRecord.foreignEquityPlanPct}% (Inspect Drift →)
                                 </div>
                             </div>
                         </div>
@@ -866,7 +866,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                                     Portfolio Wealth & Principal Trajectory (2020 – 2026)
                                 </h3>
                                 <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-                                    Grew from ฿473,131.59 in Q1/2020 to {formatTHB(latestRecord.totalBalance)} in {latestRecord.periodLabel} (+582.1% total expansion)
+                                    Grew from {formatTHB(enrichedData[0]?.totalBalance || 265425.77)} in {enrichedData[0]?.periodLabel || 'Q1/2020'} to {formatTHB(latestRecord.totalBalance)} in {latestRecord.periodLabel} (+{(((latestRecord.totalBalance - (enrichedData[0]?.totalBalance || 265425.77)) / (enrichedData[0]?.totalBalance || 265425.77)) * 100).toFixed(1)}% expansion)
                                 </p>
                             </div>
 

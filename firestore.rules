@@ -91,7 +91,7 @@ service cloud.firestore {
         request.resource.data[field].size() <= maxLen;
     }
 
-    // Validate optional string (if present and non-null, must be string within length bounds)
+    // Validate optional string
     function isValidOptionalString(field, minLen, maxLen) {
       return !(field in request.resource.data) ||
         request.resource.data[field] == null ||
@@ -115,64 +115,9 @@ service cloud.firestore {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
     }
 
-    // Validate bounded finite number
-    function isBoundedNumber(val, minVal, maxVal) {
-      return val is number && val >= minVal && val <= maxVal;
-    }
-
     // ===============================================================
-    // Domain Validators (Used in BOTH create and update)
+    // Domain Validators (Inlined to stay well under Firestore's 20-call limit)
     // ===============================================================
-
-    function isValidAccountMovementRow(row) {
-      let allowedKeys = [
-        'memberContribution',
-        'memberEarnings',
-        'employerContribution',
-        'employerEarnings',
-        'total'
-      ];
-      return row is map &&
-        row.keys().hasAll(allowedKeys) &&
-        row.keys().hasOnly(allowedKeys) &&
-        isBoundedNumber(row.memberContribution, -1000000000, 1000000000) &&
-        isBoundedNumber(row.memberEarnings, -1000000000, 1000000000) &&
-        isBoundedNumber(row.employerContribution, -1000000000, 1000000000) &&
-        isBoundedNumber(row.employerEarnings, -1000000000, 1000000000) &&
-        isBoundedNumber(row.total, -1000000000, 1000000000);
-    }
-
-    function isValidPolicyItem(policy) {
-      let allowedKeys = [
-        'code',
-        'nameTh',
-        'manager',
-        'category',
-        'nav',
-        'units',
-        'planAllocation',
-        'actualPortion',
-        'ytdReturn',
-        'accReturn5Y'
-      ];
-      return policy is map &&
-        policy.keys().hasOnly(allowedKeys) &&
-        policy.code is string && policy.code.size() >= 1 && policy.code.size() <= 32 &&
-        policy.nameTh is string && policy.nameTh.size() >= 1 && policy.nameTh.size() <= 128 &&
-        policy.manager in ['UOB', 'TISCO'] &&
-        policy.category in ['Fixed Income', 'Mixed', 'Foreign Equity'] &&
-        isBoundedNumber(policy.nav, 0, 1000000) &&
-        isBoundedNumber(policy.units, 0, 1000000000) &&
-        isBoundedNumber(policy.planAllocation, 0, 100) &&
-        isBoundedNumber(policy.actualPortion, 0, 100) &&
-        isBoundedNumber(policy.ytdReturn, -1000, 10000) &&
-        (!('accReturn5Y' in policy) || policy.accReturn5Y == null || isBoundedNumber(policy.accReturn5Y, -1000, 10000));
-    }
-
-    function isValidPoliciesList(policies) {
-      return isValidList(policies, 20) &&
-        (policies.size() == 0 || isValidPolicyItem(policies[0]));
-    }
 
     function isValidPVDRecord(data, recordId) {
       let requiredFields = [
@@ -213,32 +158,39 @@ service cloud.firestore {
         'policies',
         'updatedAt'
       ];
+      let movementKeys = [
+        'memberContribution',
+        'memberEarnings',
+        'employerContribution',
+        'employerEarnings',
+        'total'
+      ];
       return recordId.size() >= 1 &&
         recordId.size() <= 64 &&
-        hasRequiredFields(requiredFields) &&
-        hasOnlyAllowedFields(allowedFields) &&
-        validStringLength('id', 1, 64) &&
-        validStringLength('statementDate', 1, 32) &&
-        isBoundedNumber(data.quarter, 1, 4) &&
-        isBoundedNumber(data.year, 2000, 2100) &&
-        isBoundedNumber(data.memberContribution, -1000000000, 1000000000) &&
-        isBoundedNumber(data.memberEarnings, -1000000000, 1000000000) &&
-        isBoundedNumber(data.employerContribution, -1000000000, 1000000000) &&
-        isBoundedNumber(data.employerEarnings, -1000000000, 1000000000) &&
-        isBoundedNumber(data.totalMemberPortion, -1000000000, 1000000000) &&
-        isBoundedNumber(data.totalEmployerPortion, -1000000000, 1000000000) &&
-        isBoundedNumber(data.totalBalance, -1000000000, 1000000000) &&
-        isValidOptionalString('statementDateDisplay', 0, 32) &&
-        isValidOptionalString('statementDateThai', 0, 32) &&
-        (!('thaiYear' in data) || data.thaiYear == null || isBoundedNumber(data.thaiYear, 2400, 2700)) &&
-        isValidOptionalString('documentNo', 0, 64) &&
-        isValidOptionalString('planCode', 0, 64) &&
-        isValidOptionalString('planName', 0, 256) &&
-        isValidOptionalString('planNameTh', 0, 256) &&
-        (!('returnRate' in data) || data.returnRate == null || isBoundedNumber(data.returnRate, -1000, 10000)) &&
-        (!('prevYear' in data) || data.prevYear == null || isValidAccountMovementRow(data.prevYear)) &&
-        (!('ytd' in data) || data.ytd == null || isValidAccountMovementRow(data.ytd)) &&
-        (!('policies' in data) || data.policies == null || isValidPoliciesList(data.policies)) &&
+        data.keys().hasAll(requiredFields) &&
+        data.keys().hasOnly(allowedFields) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 64 &&
+        data.statementDate is string && data.statementDate.size() >= 1 && data.statementDate.size() <= 32 &&
+        data.quarter is number && data.quarter >= 1 && data.quarter <= 4 &&
+        data.year is number && data.year >= 2000 && data.year <= 2100 &&
+        data.memberContribution is number && data.memberContribution >= -1000000000 && data.memberContribution <= 1000000000 &&
+        data.memberEarnings is number && data.memberEarnings >= -1000000000 && data.memberEarnings <= 1000000000 &&
+        data.employerContribution is number && data.employerContribution >= -1000000000 && data.employerContribution <= 1000000000 &&
+        data.employerEarnings is number && data.employerEarnings >= -1000000000 && data.employerEarnings <= 1000000000 &&
+        data.totalMemberPortion is number && data.totalMemberPortion >= -1000000000 && data.totalMemberPortion <= 1000000000 &&
+        data.totalEmployerPortion is number && data.totalEmployerPortion >= -1000000000 && data.totalEmployerPortion <= 1000000000 &&
+        data.totalBalance is number && data.totalBalance >= -1000000000 && data.totalBalance <= 1000000000 &&
+        (!('statementDateDisplay' in data) || data.statementDateDisplay == null || (data.statementDateDisplay is string && data.statementDateDisplay.size() <= 32)) &&
+        (!('statementDateThai' in data) || data.statementDateThai == null || (data.statementDateThai is string && data.statementDateThai.size() <= 32)) &&
+        (!('thaiYear' in data) || data.thaiYear == null || (data.thaiYear is number && data.thaiYear >= 2400 && data.thaiYear <= 2700)) &&
+        (!('documentNo' in data) || data.documentNo == null || (data.documentNo is string && data.documentNo.size() <= 64)) &&
+        (!('planCode' in data) || data.planCode == null || (data.planCode is string && data.planCode.size() <= 64)) &&
+        (!('planName' in data) || data.planName == null || (data.planName is string && data.planName.size() <= 256)) &&
+        (!('planNameTh' in data) || data.planNameTh == null || (data.planNameTh is string && data.planNameTh.size() <= 256)) &&
+        (!('returnRate' in data) || data.returnRate == null || (data.returnRate is number && data.returnRate >= -1000 && data.returnRate <= 10000)) &&
+        (!('prevYear' in data) || data.prevYear == null || (data.prevYear is map && data.prevYear.keys().hasOnly(movementKeys) && data.prevYear.total is number)) &&
+        (!('ytd' in data) || data.ytd == null || (data.ytd is map && data.ytd.keys().hasOnly(movementKeys) && data.ytd.total is number)) &&
+        (!('policies' in data) || data.policies == null || (data.policies is list && data.policies.size() <= 20)) &&
         (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 64) || data.updatedAt is timestamp);
     }
 
@@ -247,22 +199,22 @@ service cloud.firestore {
         data is map &&
         data.keys().size() >= 1 &&
         data.keys().size() <= 20 &&
-        isValidOptionalString('memberName', 0, 128) &&
-        isValidOptionalString('employeeCode', 0, 64) &&
-        isValidOptionalString('memberCode', 0, 64) &&
-        isValidOptionalString('referenceCode', 0, 64) &&
-        isValidOptionalString('departmentCode', 0, 64) &&
-        isValidOptionalString('employerName', 0, 256) &&
-        isValidOptionalString('employerNameTh', 0, 256) &&
-        isValidOptionalString('fundNameTh', 0, 256) &&
-        isValidOptionalString('fundNameEn', 0, 256) &&
-        isValidOptionalString('registrationNo', 0, 64) &&
+        (!('memberName' in data) || data.memberName == null || (data.memberName is string && data.memberName.size() <= 128)) &&
+        (!('employeeCode' in data) || data.employeeCode == null || (data.employeeCode is string && data.employeeCode.size() <= 64)) &&
+        (!('memberCode' in data) || data.memberCode == null || (data.memberCode is string && data.memberCode.size() <= 64)) &&
+        (!('referenceCode' in data) || data.referenceCode == null || (data.referenceCode is string && data.referenceCode.size() <= 64)) &&
+        (!('departmentCode' in data) || data.departmentCode == null || (data.departmentCode is string && data.departmentCode.size() <= 64)) &&
+        (!('employerName' in data) || data.employerName == null || (data.employerName is string && data.employerName.size() <= 256)) &&
+        (!('employerNameTh' in data) || data.employerNameTh == null || (data.employerNameTh is string && data.employerNameTh.size() <= 256)) &&
+        (!('fundNameTh' in data) || data.fundNameTh == null || (data.fundNameTh is string && data.fundNameTh.size() <= 256)) &&
+        (!('fundNameEn' in data) || data.fundNameEn == null || (data.fundNameEn is string && data.fundNameEn.size() <= 256)) &&
+        (!('registrationNo' in data) || data.registrationNo == null || (data.registrationNo is string && data.registrationNo.size() <= 64)) &&
         (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 64) || data.updatedAt is timestamp) &&
-        (!('currentAge' in data) || isBoundedNumber(data.currentAge, 18, 100)) &&
-        (!('retirementAge' in data) || isBoundedNumber(data.retirementAge, 30, 100)) &&
-        (!('expectedAnnualReturn' in data) || isBoundedNumber(data.expectedAnnualReturn, -50, 100)) &&
-        (!('annualContributionGrowth' in data) || isBoundedNumber(data.annualContributionGrowth, -50, 100)) &&
-        (!('targetAmount' in data) || isBoundedNumber(data.targetAmount, 0, 10000000000));
+        (!('currentAge' in data) || (data.currentAge is number && data.currentAge >= 18 && data.currentAge <= 100)) &&
+        (!('retirementAge' in data) || (data.retirementAge is number && data.retirementAge >= 30 && data.retirementAge <= 100)) &&
+        (!('expectedAnnualReturn' in data) || (data.expectedAnnualReturn is number && data.expectedAnnualReturn >= -50 && data.expectedAnnualReturn <= 100)) &&
+        (!('annualContributionGrowth' in data) || (data.annualContributionGrowth is number && data.annualContributionGrowth >= -50 && data.annualContributionGrowth <= 100)) &&
+        (!('targetAmount' in data) || (data.targetAmount is number && data.targetAmount >= 0 && data.targetAmount <= 10000000000));
     }
 
     // ===============================================================
