@@ -1,0 +1,17 @@
+{
+  "name": "AEROTHAI PVD Monitor & Wealth Analytics",
+  "short_name": "PVD Monitor",
+  "description": "AEROTHAI Provident Fund Analytics, UOBAM vs TISCO Sub-Fund Tracker, Statement Inspector & Retirement Simulator",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1120",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/pvd-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

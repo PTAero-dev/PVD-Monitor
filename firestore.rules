@@ -1,0 +1,294 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: pvd_records
+// Document ID: {recordId} (string, 1..64 chars, e.g., '2026-Q3')
+// Fields:
+//   - id: string (required, 1..64 chars, immutable on update) - unique statement identifier
+//   - statementDate: string (required, 1..32 chars) - statement date (YYYY-MM-DD or DD/MM/YYYY)
+//   - statementDateDisplay: string (optional, 0..32 chars) - formatted AD date string
+//   - statementDateThai: string (optional, 0..32 chars) - formatted BE date string
+//   - quarter: number (required, 1..4) - statement quarter (Q1..Q4)
+//   - year: number (required, 2000..2100) - statement AD year
+//   - thaiYear: number (optional, 2400..2700) - statement BE year
+//   - documentNo: string (optional, 0..64 chars) - statement document number
+//   - planCode: string (optional, 0..64 chars) - investment plan code
+//   - planName: string (optional, 0..256 chars) - investment plan name (EN)
+//   - planNameTh: string (optional, 0..256 chars) - investment plan name (TH)
+//   - memberContribution: number (required) - ending member contribution balance
+//   - memberEarnings: number (required) - ending member earnings balance
+//   - employerContribution: number (required) - ending employer contribution balance
+//   - employerEarnings: number (required) - ending employer earnings balance
+//   - totalMemberPortion: number (required) - total member balance
+//   - totalEmployerPortion: number (required) - total employer balance
+//   - totalBalance: number (required) - grand total PVD balance
+//   - returnRate: number (optional, -1000..10000) - YTD return rate percentage
+//   - prevYear: map (optional, 5 keys) - previous year movement breakdown
+//   - ytd: map (optional, 5 keys) - year-to-date movement breakdown
+//   - policies: list (optional, max 20 items) - sub-fund policy breakdown
+//   - updatedAt: string or timestamp (optional, max 64 chars if string) - last modified timestamp
+//
+// Collection: pvd_settings
+// Document ID: {settingId} (enum: 'profile' | 'retirement_goal')
+// Fields:
+//   - Bounded configuration map (1..20 keys) for member profile or retirement goal parameters
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user owns the resource (for user-owned documents)
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user is owner based on document's uid field
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    // Verify UID hasn't been tampered with on create
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    // Ensure uid field is not modified on update
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    // Validate required fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that the document contains only the allowed fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate string length
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // Validate optional string (if present and non-null, must be string within length bounds)
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        request.resource.data[field] == null ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    // Validate that a list is a list and enforces size limits
+    function isValidList(list, maxSize) {
+      return list is list && list.size() <= maxSize;
+    }
+
+    // Validate that a map contains only allowed keys
+    function isValidMap(mapData, allowedKeys) {
+      return mapData is map && mapData.keys().hasOnly(allowedKeys);
+    }
+
+    // Validate that immutable fields have not changed on update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate bounded finite number
+    function isBoundedNumber(val, minVal, maxVal) {
+      return val is number && val >= minVal && val <= maxVal;
+    }
+
+    // ===============================================================
+    // Domain Validators (Used in BOTH create and update)
+    // ===============================================================
+
+    function isValidAccountMovementRow(row) {
+      let allowedKeys = [
+        'memberContribution',
+        'memberEarnings',
+        'employerContribution',
+        'employerEarnings',
+        'total'
+      ];
+      return row is map &&
+        row.keys().hasAll(allowedKeys) &&
+        row.keys().hasOnly(allowedKeys) &&
+        isBoundedNumber(row.memberContribution, -1000000000, 1000000000) &&
+        isBoundedNumber(row.memberEarnings, -1000000000, 1000000000) &&
+        isBoundedNumber(row.employerContribution, -1000000000, 1000000000) &&
+        isBoundedNumber(row.employerEarnings, -1000000000, 1000000000) &&
+        isBoundedNumber(row.total, -1000000000, 1000000000);
+    }
+
+    function isValidPolicyItem(policy) {
+      let allowedKeys = [
+        'code',
+        'nameTh',
+        'manager',
+        'category',
+        'nav',
+        'units',
+        'planAllocation',
+        'actualPortion',
+        'ytdReturn',
+        'accReturn5Y'
+      ];
+      return policy is map &&
+        policy.keys().hasOnly(allowedKeys) &&
+        policy.code is string && policy.code.size() >= 1 && policy.code.size() <= 32 &&
+        policy.nameTh is string && policy.nameTh.size() >= 1 && policy.nameTh.size() <= 128 &&
+        policy.manager in ['UOB', 'TISCO'] &&
+        policy.category in ['Fixed Income', 'Mixed', 'Foreign Equity'] &&
+        isBoundedNumber(policy.nav, 0, 1000000) &&
+        isBoundedNumber(policy.units, 0, 1000000000) &&
+        isBoundedNumber(policy.planAllocation, 0, 100) &&
+        isBoundedNumber(policy.actualPortion, 0, 100) &&
+        isBoundedNumber(policy.ytdReturn, -1000, 10000) &&
+        (!('accReturn5Y' in policy) || policy.accReturn5Y == null || isBoundedNumber(policy.accReturn5Y, -1000, 10000));
+    }
+
+    function isValidPoliciesList(policies) {
+      return isValidList(policies, 20) &&
+        (policies.size() == 0 || isValidPolicyItem(policies[0]));
+    }
+
+    function isValidPVDRecord(data, recordId) {
+      let requiredFields = [
+        'id',
+        'statementDate',
+        'quarter',
+        'year',
+        'memberContribution',
+        'memberEarnings',
+        'employerContribution',
+        'employerEarnings',
+        'totalMemberPortion',
+        'totalEmployerPortion',
+        'totalBalance'
+      ];
+      let allowedFields = [
+        'id',
+        'statementDate',
+        'statementDateDisplay',
+        'statementDateThai',
+        'quarter',
+        'year',
+        'thaiYear',
+        'documentNo',
+        'planCode',
+        'planName',
+        'planNameTh',
+        'memberContribution',
+        'memberEarnings',
+        'employerContribution',
+        'employerEarnings',
+        'totalMemberPortion',
+        'totalEmployerPortion',
+        'totalBalance',
+        'returnRate',
+        'prevYear',
+        'ytd',
+        'policies',
+        'updatedAt'
+      ];
+      return recordId.size() >= 1 &&
+        recordId.size() <= 64 &&
+        hasRequiredFields(requiredFields) &&
+        hasOnlyAllowedFields(allowedFields) &&
+        validStringLength('id', 1, 64) &&
+        validStringLength('statementDate', 1, 32) &&
+        isBoundedNumber(data.quarter, 1, 4) &&
+        isBoundedNumber(data.year, 2000, 2100) &&
+        isBoundedNumber(data.memberContribution, -1000000000, 1000000000) &&
+        isBoundedNumber(data.memberEarnings, -1000000000, 1000000000) &&
+        isBoundedNumber(data.employerContribution, -1000000000, 1000000000) &&
+        isBoundedNumber(data.employerEarnings, -1000000000, 1000000000) &&
+        isBoundedNumber(data.totalMemberPortion, -1000000000, 1000000000) &&
+        isBoundedNumber(data.totalEmployerPortion, -1000000000, 1000000000) &&
+        isBoundedNumber(data.totalBalance, -1000000000, 1000000000) &&
+        isValidOptionalString('statementDateDisplay', 0, 32) &&
+        isValidOptionalString('statementDateThai', 0, 32) &&
+        (!('thaiYear' in data) || data.thaiYear == null || isBoundedNumber(data.thaiYear, 2400, 2700)) &&
+        isValidOptionalString('documentNo', 0, 64) &&
+        isValidOptionalString('planCode', 0, 64) &&
+        isValidOptionalString('planName', 0, 256) &&
+        isValidOptionalString('planNameTh', 0, 256) &&
+        (!('returnRate' in data) || data.returnRate == null || isBoundedNumber(data.returnRate, -1000, 10000)) &&
+        (!('prevYear' in data) || data.prevYear == null || isValidAccountMovementRow(data.prevYear)) &&
+        (!('ytd' in data) || data.ytd == null || isValidAccountMovementRow(data.ytd)) &&
+        (!('policies' in data) || data.policies == null || isValidPoliciesList(data.policies)) &&
+        (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 64) || data.updatedAt is timestamp);
+    }
+
+    function isValidPVDSetting(settingId, data) {
+      return settingId in ['profile', 'retirement_goal'] &&
+        data is map &&
+        data.keys().size() >= 1 &&
+        data.keys().size() <= 20 &&
+        isValidOptionalString('memberName', 0, 128) &&
+        isValidOptionalString('employeeCode', 0, 64) &&
+        isValidOptionalString('memberCode', 0, 64) &&
+        isValidOptionalString('referenceCode', 0, 64) &&
+        isValidOptionalString('departmentCode', 0, 64) &&
+        isValidOptionalString('employerName', 0, 256) &&
+        isValidOptionalString('employerNameTh', 0, 256) &&
+        isValidOptionalString('fundNameTh', 0, 256) &&
+        isValidOptionalString('fundNameEn', 0, 256) &&
+        isValidOptionalString('registrationNo', 0, 64) &&
+        (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 64) || data.updatedAt is timestamp) &&
+        (!('currentAge' in data) || isBoundedNumber(data.currentAge, 18, 100)) &&
+        (!('retirementAge' in data) || isBoundedNumber(data.retirementAge, 30, 100)) &&
+        (!('expectedAnnualReturn' in data) || isBoundedNumber(data.expectedAnnualReturn, -50, 100)) &&
+        (!('annualContributionGrowth' in data) || isBoundedNumber(data.annualContributionGrowth, -50, 100)) &&
+        (!('targetAmount' in data) || isBoundedNumber(data.targetAmount, 0, 10000000000));
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Quarterly PVD statement documents
+    match /pvd_records/{recordId} {
+      allow read: if true;
+      allow create: if isValidPVDRecord(request.resource.data, recordId);
+      allow update: if isValidPVDRecord(request.resource.data, recordId) &&
+                       areImmutableFieldsUnchanged(['id']);
+      allow delete: if recordId.size() >= 1 && recordId.size() <= 64;
+    }
+
+    // App configuration documents (member profile & retirement goal settings)
+    match /pvd_settings/{settingId} {
+      allow read: if true;
+      allow create: if isValidPVDSetting(settingId, request.resource.data);
+      allow update: if isValidPVDSetting(settingId, request.resource.data);
+      allow delete: if settingId in ['profile', 'retirement_goal'];
+    }
+
+    // Default deny for all other paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
