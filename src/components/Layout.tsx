@@ -104,7 +104,7 @@ const Layout: React.FC<LayoutProps> = ({
                                 </span>
                             </div>
                             <p style={{ fontSize: '0.72rem', color: 'var(--color-text-secondary)', fontWeight: 500 }}>
-                                Maj. PRACH TUTTIPONGSAWAT • #00463359
+                                Portfolio & Wealth Intelligence
                             </p>
                         </div>
                     </div>

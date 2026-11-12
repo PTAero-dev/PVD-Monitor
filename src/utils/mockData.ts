@@ -1,11 +1,11 @@
 import type { PVDRecord, MemberProfile } from '../types';
 
 export const defaultMemberProfile: MemberProfile = {
-    memberName: 'Maj. PRACH TUTTIPONGSAWAT',
-    employeeCode: '00463359',
-    memberCode: '0892003189',
-    referenceCode: 'R203600139',
-    departmentCode: '5000002350000045',
+    memberName: 'AEROTHAI PVD Member',
+    employeeCode: '',
+    memberCode: '',
+    referenceCode: '',
+    departmentCode: '',
     employerName: 'AEROTHAI (Aeronautical Radio of Thailand Ltd.)',
     employerNameTh: 'บริษัท วิทยุการบินแห่งประเทศไทย จำกัด',
     fundNameTh: 'กองทุนสำรองเลี้ยงชีพ พนักงานบริษัทวิทยุการบินแห่งประเทศไทย จำกัด ซึ่งจดทะเบียนแล้ว',

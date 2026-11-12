@@ -502,10 +502,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
                             <div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.3rem' }}>
-                                    <span className="badge badge-primary">{memberProfile.memberName}</span>
-                                    <span style={{ fontSize: '0.76rem', color: 'var(--color-text-secondary)', fontWeight: 600 }}>
-                                        Emp ID: {memberProfile.employeeCode} • Member ID: {memberProfile.memberCode}
-                                    </span>
+                                    <span className="badge badge-primary">AEROTHAI Provident Fund</span>
                                     <span className="badge badge-success">
                                         {enrichedData.length} Verified Statements (2020 Q1 – {latestRecord.periodLabel})
                                     </span>

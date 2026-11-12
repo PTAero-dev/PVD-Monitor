@@ -213,10 +213,6 @@ const StatementInspector: React.FC<StatementInspectorProps> = ({
                             <span style={{ color: 'var(--color-text-muted)' }}>ชื่อนายจ้าง / Employer: </span>
                             <strong>{memberProfile.employerNameTh} (AEROTHAI)</strong>
                         </div>
-                        <div>
-                            <span style={{ color: 'var(--color-text-muted)' }}>ชื่อสมาชิก / Member's Name: </span>
-                            <strong style={{ color: 'var(--color-primary-light)', fontSize: '0.9rem' }}>{memberProfile.memberName}</strong>
-                        </div>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }} className="tabular-nums">
@@ -231,14 +227,6 @@ const StatementInspector: React.FC<StatementInspectorProps> = ({
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                             <span style={{ color: 'var(--color-text-muted)' }}>ทะเบียนกองทุนเลขที่ / Reg. No.:</span>
                             <strong>{memberProfile.registrationNo}</strong>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ color: 'var(--color-text-muted)' }}>รหัสพนักงาน / Employee Code:</span>
-                            <strong>{rec.year === 2020 && rec.quarter <= 2 ? '463359' : memberProfile.employeeCode}</strong>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ color: 'var(--color-text-muted)' }}>รหัสอ้างอิง / Reference Code:</span>
-                            <strong>{memberProfile.referenceCode} • Member: {memberProfile.memberCode}</strong>
                         </div>
                     </div>
                 </div>
