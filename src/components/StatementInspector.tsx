@@ -5,6 +5,7 @@ import {
     FileText,
     Edit3,
     PlusCircle,
+    FileUp,
     CheckCircle2,
     Building2,
     UserCheck
@@ -19,6 +20,7 @@ interface StatementInspectorProps {
     memberProfile: MemberProfile;
     onEditRecord: (record: EnrichedPVDRecord) => void;
     onAddRecord: () => void;
+    onUploadPdfTrigger?: () => void;
 }
 
 const fmtNum = (val: number, decimals = 2) =>
@@ -33,7 +35,8 @@ const StatementInspector: React.FC<StatementInspectorProps> = ({
     onSelectRecordId,
     memberProfile,
     onEditRecord,
-    onAddRecord
+    onAddRecord,
+    onUploadPdfTrigger
 }) => {
     const currentIndex = Math.max(
         0,
@@ -133,6 +136,21 @@ const StatementInspector: React.FC<StatementInspectorProps> = ({
                             <Edit3 size={15} />
                             <span>Edit</span>
                         </button>
+
+                        {onUploadPdfTrigger && (
+                            <button
+                                onClick={onUploadPdfTrigger}
+                                style={{
+                                    padding: '0.45rem 0.9rem',
+                                    background: 'rgba(16, 185, 129, 0.14)',
+                                    color: 'var(--color-success)',
+                                    border: '1px solid rgba(16, 185, 129, 0.4)'
+                                }}
+                            >
+                                <FileUp size={15} />
+                                <span>Upload PDF</span>
+                            </button>
+                        )}
 
                         <button
                             onClick={onAddRecord}

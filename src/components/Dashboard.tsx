@@ -30,7 +30,9 @@ import {
     PieChart as PieChartIcon,
     Calculator,
     Plus,
-    Eye
+    Eye,
+    FileUp,
+    Loader2
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -57,6 +59,7 @@ import {
     resetCloudToOfficialStatements,
     loadMemberProfileFromCloud
 } from '../utils/firebase';
+import { parsePVDStatementPDF, type VerificationResult } from '../utils/pdfStatementParser';
 import type { PVDRecord, MemberProfile } from '../types';
 
 interface DashboardProps {
@@ -101,6 +104,17 @@ const Dashboard: React.FC<DashboardProps> = ({
     const [selectedStatementId, setSelectedStatementId] = useState<string>('2026-Q3');
     const [showModal, setShowModal] = useState(false);
     const [editingRecord, setEditingRecord] = useState<PVDRecord | undefined>(undefined);
+    const [pdfImportState, setPdfImportState] = useState<{
+        isPdfImport: boolean;
+        verification: VerificationResult;
+        previewDataUrl?: string;
+    } | null>(null);
+    const [pdfParseProgress, setPdfParseProgress] = useState<{
+        fileName: string;
+        stage: string;
+        pct: number;
+    } | null>(null);
+    const [pdfParseError, setPdfParseError] = useState<string | null>(null);
     const [showExportMenu, setShowExportMenu] = useState(false);
 
     // Chart state
@@ -112,6 +126,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
     const dashboardRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const pdfInputRef = useRef<HTMLInputElement>(null);
 
     // Real-time Firebase Firestore subscription
     useEffect(() => {
@@ -247,6 +262,8 @@ const Dashboard: React.FC<DashboardProps> = ({
 
         setShowModal(false);
         setEditingRecord(undefined);
+        setPdfImportState(null);
+        setSelectedStatementId(docId);
 
         try {
             onSyncStatusChange('syncing');
@@ -266,6 +283,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         });
         setShowModal(false);
         setEditingRecord(undefined);
+        setPdfImportState(null);
 
         try {
             onSyncStatusChange('syncing');
@@ -472,6 +490,39 @@ const Dashboard: React.FC<DashboardProps> = ({
         reader.readAsBinaryString(file);
     };
 
+    const handleImportPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setShowExportMenu(false);
+        setPdfParseError(null);
+        setPdfParseProgress({
+            fileName: file.name,
+            stage: 'Loading PDF statement...',
+            pct: 5
+        });
+
+        try {
+            const parsed = await parsePVDStatementPDF(file, (stage, pct) => {
+                setPdfParseProgress({ fileName: file.name, stage, pct });
+            });
+            setEditingRecord(parsed.record);
+            setPdfImportState({
+                isPdfImport: true,
+                verification: parsed.verification,
+                previewDataUrl: parsed.previewDataUrl
+            });
+            setShowModal(true);
+        } catch (err) {
+            setPdfParseError(
+                err instanceof Error ? err.message : 'Unable to parse PDF statement.'
+            );
+        } finally {
+            setPdfParseProgress(null);
+            if (pdfInputRef.current) pdfInputRef.current.value = '';
+        }
+    };
+
     const zoomBtnStyle: React.CSSProperties = {
         background: 'var(--color-surface)',
         color: 'var(--color-text-secondary)',
@@ -493,6 +544,102 @@ const Dashboard: React.FC<DashboardProps> = ({
                 accept=".xlsx, .xls"
                 onChange={handleImportExcel}
             />
+
+            {/* Hidden PDF Statement file input */}
+            <input
+                type="file"
+                ref={pdfInputRef}
+                style={{ display: 'none' }}
+                accept=".pdf,application/pdf"
+                onChange={handleImportPdf}
+            />
+
+            {/* PDF Parsing Progress Overlay */}
+            {pdfParseProgress && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    backgroundColor: 'rgba(2, 6, 23, 0.72)',
+                    backdropFilter: 'blur(6px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 250,
+                    padding: '1rem'
+                }}>
+                    <div className="card" style={{
+                        width: '100%',
+                        maxWidth: '420px',
+                        padding: '1.5rem',
+                        backgroundColor: 'var(--color-surface)',
+                        border: '1px solid var(--color-border)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.85rem'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                            <Loader2 size={22} color="var(--color-primary)" className="spin" />
+                            <div>
+                                <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+                                    Reading PVD PDF Statement
+                                </div>
+                                <div style={{ fontSize: '0.76rem', color: 'var(--color-text-secondary)', wordBreak: 'break-word' }}>
+                                    {pdfParseProgress.fileName}
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{
+                            height: '8px',
+                            borderRadius: '999px',
+                            background: 'var(--color-bg-subtle)',
+                            overflow: 'hidden'
+                        }}>
+                            <div style={{
+                                height: '100%',
+                                width: `${Math.max(5, Math.min(100, pdfParseProgress.pct))}%`,
+                                background: 'var(--color-primary)',
+                                transition: 'width 0.2s ease'
+                            }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--color-text-secondary)' }}>
+                            <span>{pdfParseProgress.stage}</span>
+                            <strong>{pdfParseProgress.pct}%</strong>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {pdfParseError && (
+                <div className="card" style={{
+                    padding: '0.9rem 1.15rem',
+                    border: '1px solid var(--color-danger)',
+                    background: 'var(--color-danger-bg)',
+                    color: 'var(--color-danger)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '1rem',
+                    fontSize: '0.84rem'
+                }}>
+                    <span>
+                        <strong>PDF Import Error:</strong> {pdfParseError}
+                    </span>
+                    <button
+                        onClick={() => setPdfParseError(null)}
+                        style={{
+                            padding: '0.3rem 0.65rem',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--color-danger)',
+                            background: 'transparent',
+                            color: 'var(--color-danger)',
+                            fontSize: '0.75rem',
+                            fontWeight: 600
+                        }}
+                    >
+                        Dismiss
+                    </button>
+                </div>
+            )}
 
             {/* TAB 1: EXECUTIVE OVERVIEW */}
             {activeTab === 'overview' && latestRecord && (
@@ -631,6 +778,27 @@ const Dashboard: React.FC<DashboardProps> = ({
                                             <button
                                                 onClick={() => {
                                                     setShowExportMenu(false);
+                                                    pdfInputRef.current?.click();
+                                                }}
+                                                style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.6rem',
+                                                    padding: '0.7rem 1rem',
+                                                    border: 'none',
+                                                    background: 'transparent',
+                                                    color: 'var(--color-text-main)',
+                                                    fontSize: '0.82rem',
+                                                    textAlign: 'left',
+                                                    borderBottom: '1px solid var(--color-border-subtle)'
+                                                }}
+                                            >
+                                                <FileUp size={15} color="#10b981" />
+                                                Upload PDF Statement
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    setShowExportMenu(false);
                                                     handleResetToOfficial();
                                                 }}
                                                 style={{
@@ -653,7 +821,27 @@ const Dashboard: React.FC<DashboardProps> = ({
                                 </div>
 
                                 <button
+                                    onClick={() => pdfInputRef.current?.click()}
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.35rem',
+                                        padding: '0.55rem 0.95rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        border: '1px solid rgba(16, 185, 129, 0.45)',
+                                        background: 'rgba(16, 185, 129, 0.12)',
+                                        color: 'var(--color-success)',
+                                        fontSize: '0.82rem',
+                                        fontWeight: 700
+                                    }}
+                                >
+                                    <FileUp size={16} />
+                                    Upload PDF
+                                </button>
+
+                                <button
                                     onClick={() => {
+                                        setPdfImportState(null);
                                         setEditingRecord(undefined);
                                         setShowModal(true);
                                     }}
@@ -1162,11 +1350,14 @@ const Dashboard: React.FC<DashboardProps> = ({
                         data={enrichedData}
                         compact={true}
                         onInspectStatement={handleInspectStatement}
+                        onUploadPdfTrigger={() => pdfInputRef.current?.click()}
                         onEdit={(rec) => {
+                            setPdfImportState(null);
                             setEditingRecord(rec);
                             setShowModal(true);
                         }}
                         onAddRecord={() => {
+                            setPdfImportState(null);
                             setEditingRecord(undefined);
                             setShowModal(true);
                         }}
@@ -1186,11 +1377,14 @@ const Dashboard: React.FC<DashboardProps> = ({
                     selectedRecordId={selectedStatementId}
                     onSelectRecordId={setSelectedStatementId}
                     memberProfile={memberProfile}
+                    onUploadPdfTrigger={() => pdfInputRef.current?.click()}
                     onEditRecord={(rec) => {
+                        setPdfImportState(null);
                         setEditingRecord(rec);
                         setShowModal(true);
                     }}
                     onAddRecord={() => {
+                        setPdfImportState(null);
                         setEditingRecord(undefined);
                         setShowModal(true);
                     }}
@@ -1208,11 +1402,14 @@ const Dashboard: React.FC<DashboardProps> = ({
                     data={enrichedData}
                     compact={false}
                     onInspectStatement={handleInspectStatement}
+                    onUploadPdfTrigger={() => pdfInputRef.current?.click()}
                     onEdit={(rec) => {
+                        setPdfImportState(null);
                         setEditingRecord(rec);
                         setShowModal(true);
                     }}
                     onAddRecord={() => {
+                        setPdfImportState(null);
                         setEditingRecord(undefined);
                         setShowModal(true);
                     }}
@@ -1227,9 +1424,13 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <DataEntryForm
                     initialData={editingRecord}
                     templateRecord={latestRecord}
+                    isPdfImport={pdfImportState?.isPdfImport}
+                    pdfVerification={pdfImportState?.verification}
+                    pdfPreviewUrl={pdfImportState?.previewDataUrl}
                     onClose={() => {
                         setShowModal(false);
                         setEditingRecord(undefined);
+                        setPdfImportState(null);
                     }}
                     onSubmit={handleAddOrUpdateRecord}
                     onDelete={handleDeleteRecord}

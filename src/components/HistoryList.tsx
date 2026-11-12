@@ -6,6 +6,7 @@ import {
     Plus,
     FileSpreadsheet,
     Upload,
+    FileUp,
     RotateCcw,
     Filter,
     Calendar,
@@ -19,6 +20,7 @@ interface HistoryListProps {
     onEdit?: (record: EnrichedPVDRecord) => void;
     onInspectStatement?: (recordId: string) => void;
     onAddRecord?: () => void;
+    onUploadPdfTrigger?: () => void;
     onExportExcel?: () => void;
     onImportExcelTrigger?: () => void;
     onResetToOfficial?: () => void;
@@ -38,6 +40,7 @@ const HistoryList: React.FC<HistoryListProps> = ({
     onEdit,
     onInspectStatement,
     onAddRecord,
+    onUploadPdfTrigger,
     onExportExcel,
     onImportExcelTrigger,
     onResetToOfficial,
@@ -180,6 +183,27 @@ const HistoryList: React.FC<HistoryListProps> = ({
                         >
                             <RotateCcw size={14} />
                             Verify / Restore 27 PDFs
+                        </button>
+                    )}
+
+                    {onUploadPdfTrigger && (
+                        <button
+                            onClick={onUploadPdfTrigger}
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.48rem 0.9rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                background: 'rgba(16, 185, 129, 0.12)',
+                                color: 'var(--color-success)',
+                                fontSize: '0.78rem',
+                                fontWeight: 700
+                            }}
+                        >
+                            <FileUp size={15} />
+                            Upload PDF Statement
                         </button>
                     )}
 

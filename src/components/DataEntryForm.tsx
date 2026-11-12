@@ -1,7 +1,18 @@
-import React, { useState } from 'react';
-import { X, Trash2, ChevronDown, ChevronUp, Layers } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import {
+    X,
+    Trash2,
+    ChevronDown,
+    ChevronUp,
+    Layers,
+    CheckCircle2,
+    AlertTriangle,
+    FileUp,
+    Eye
+} from 'lucide-react';
 import type { PVDRecord, PVDPolicy } from '../types';
 import { POLICY_METADATA } from '../utils/mockData';
+import { parsePVDStatementPDF, type VerificationResult } from '../utils/pdfStatementParser';
 
 interface DataEntryFormProps {
     onClose: () => void;
@@ -9,6 +20,9 @@ interface DataEntryFormProps {
     onDelete?: (id: string) => void;
     initialData?: PVDRecord;
     templateRecord?: PVDRecord;
+    isPdfImport?: boolean;
+    pdfVerification?: VerificationResult;
+    pdfPreviewUrl?: string;
 }
 
 const DEFAULT_POLICIES: PVDPolicy[] = [
@@ -112,7 +126,10 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
     onSubmit,
     onDelete,
     initialData,
-    templateRecord
+    templateRecord,
+    isPdfImport = false,
+    pdfVerification,
+    pdfPreviewUrl
 }) => {
     const nextQuarter = templateRecord
         ? (templateRecord.quarter === 4 ? 1 : templateRecord.quarter + 1)
@@ -120,6 +137,19 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
     const nextYear = templateRecord
         ? (templateRecord.quarter === 4 ? templateRecord.year + 1 : templateRecord.year)
         : 2026;
+
+    const [isImportMode, setIsImportMode] = useState<boolean>(isPdfImport);
+    const [verification, setVerification] = useState<VerificationResult | undefined>(pdfVerification);
+    const [previewUrl, setPreviewUrl] = useState<string | undefined>(pdfPreviewUrl);
+    const [showPdfPreview, setShowPdfPreview] = useState<boolean>(false);
+    const [pdfBusy, setPdfBusy] = useState<{ stage: string; pct: number } | null>(null);
+    const [pdfError, setPdfError] = useState<string | null>(null);
+    const [prevYearData, setPrevYearData] = useState<PVDRecord['prevYear']>(initialData?.prevYear);
+    const [planCode, setPlanCode] = useState<string>(initialData?.planCode || 'DIY');
+    const [planName, setPlanName] = useState<string>(
+        initialData?.planName || 'แผนกำหนดสัดส่วนการลงทุนด้วยตนเอง'
+    );
+    const localPdfInputRef = useRef<HTMLInputElement>(null);
 
     const [quarter, setQuarter] = useState<number>(initialData?.quarter ?? nextQuarter);
     const [year, setYear] = useState<number>(initialData?.year ?? nextYear);
@@ -163,7 +193,49 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
         return DEFAULT_POLICIES.map(p => ({ ...p }));
     });
 
-    const [showPoliciesSection, setShowPoliciesSection] = useState<boolean>(false);
+    const [showPoliciesSection, setShowPoliciesSection] = useState<boolean>(
+        Boolean(pdfVerification && !pdfVerification.isMathVerified)
+    );
+
+    const handleInlinePdfSelected = async (file: File | undefined) => {
+        if (!file) return;
+        setPdfError(null);
+        setPdfBusy({ stage: 'Reading PDF...', pct: 5 });
+        try {
+            const parsed = await parsePVDStatementPDF(file, (stage, pct) => {
+                setPdfBusy({ stage, pct });
+            });
+            const r = parsed.record;
+            setIsImportMode(true);
+            setQuarter(r.quarter);
+            setYear(r.year);
+            setDateInput(toInputDate(r.statementDate));
+            setDocumentNo(r.documentNo || 'AERO/00164');
+            setReturnRate(r.returnRate ?? 0);
+            setMemberContribution(r.memberContribution);
+            setMemberEarnings(r.memberEarnings);
+            setEmployerContribution(r.employerContribution);
+            setEmployerEarnings(r.employerEarnings);
+            setYtdMemContrib(r.ytd?.memberContribution ?? 0);
+            setYtdMemEarn(r.ytd?.memberEarnings ?? 0);
+            setYtdEmpContrib(r.ytd?.employerContribution ?? 0);
+            setYtdEmpEarn(r.ytd?.employerEarnings ?? 0);
+            if (r.policies && r.policies.length > 0) {
+                setPolicies(r.policies.map(p => ({ ...p })));
+            }
+            setPrevYearData(r.prevYear);
+            setPlanCode(r.planCode || 'DIY');
+            setPlanName(r.planName || 'แผนกำหนดสัดส่วนการลงทุนด้วยตนเอง');
+            setVerification(parsed.verification);
+            setPreviewUrl(parsed.previewDataUrl);
+            setShowPoliciesSection(!parsed.verification.isMathVerified);
+        } catch (err) {
+            setPdfError(err instanceof Error ? err.message : 'Unable to parse PDF statement.');
+        } finally {
+            setPdfBusy(null);
+            if (localPdfInputRef.current) localPdfInputRef.current.value = '';
+        }
+    };
 
     const totalMemberPortion = Number((memberContribution + memberEarnings).toFixed(2));
     const totalEmployerPortion = Number((employerContribution + employerEarnings).toFixed(2));
@@ -190,15 +262,15 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
 
         const newRecord: PVDRecord = {
             ...initialData,
-            id: initialData?.id || `${year}-Q${quarter}`,
+            id: isImportMode ? `${year}-Q${quarter}` : (initialData?.id || `${year}-Q${quarter}`),
             statementDate,
             statementDateThai,
             quarter,
             year,
             thaiYear,
             documentNo,
-            planCode: initialData?.planCode || 'DIY',
-            planName: initialData?.planName || 'แผนกำหนดสัดส่วนการลงทุนด้วยตนเอง',
+            planCode,
+            planName,
             memberContribution,
             memberEarnings,
             employerContribution,
@@ -207,6 +279,7 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
             totalEmployerPortion,
             totalBalance,
             returnRate,
+            prevYear: prevYearData ?? initialData?.prevYear,
             ytd: {
                 memberContribution: ytdMemContrib,
                 memberEarnings: ytdMemEarn,
@@ -259,13 +332,19 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
                 backgroundColor: 'var(--color-surface)',
                 border: '1px solid var(--color-border)'
             }}>
-                <div className="flex-between" style={{ marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--color-border)' }}>
+                <div className="flex-between" style={{ marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--color-border)' }}>
                     <div>
                         <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>
-                            {initialData ? `Edit Statement: Q${initialData.quarter}/${initialData.year}` : 'Add Quarterly PVD Statement'}
+                            {isImportMode
+                                ? `Verify Imported PDF Statement: Q${quarter}/${year}`
+                                : initialData
+                                    ? `Edit Statement: Q${initialData.quarter}/${initialData.year}`
+                                    : 'Add Quarterly PVD Statement'}
                         </h3>
                         <p style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
-                            Changes automatically sync to Firebase Cloud Firestore & all connected devices
+                            {isImportMode
+                                ? 'Review extracted PDF values below, then click Save & Sync to Cloud.'
+                                : 'Changes automatically sync to Firebase Cloud Firestore & all connected devices'}
                         </p>
                     </div>
                     <button
@@ -281,6 +360,174 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
                         <X size={18} />
                     </button>
                 </div>
+
+                {/* Auto-fill / Re-scan from Official PDF Statement */}
+                <input
+                    ref={localPdfInputRef}
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    style={{ display: 'none' }}
+                    onChange={(e) => handleInlinePdfSelected(e.target.files?.[0])}
+                />
+
+                <div
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                        e.preventDefault();
+                        const f = e.dataTransfer.files?.[0];
+                        if (f && f.name.toLowerCase().endsWith('.pdf')) {
+                            handleInlinePdfSelected(f);
+                        }
+                    }}
+                    style={{
+                        marginBottom: '1rem',
+                        padding: '0.75rem 0.9rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px dashed var(--color-primary)',
+                        background: 'rgba(59, 130, 246, 0.06)',
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.65rem'
+                    }}
+                >
+                    <div style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
+                        <strong style={{ color: 'var(--color-text-main)' }}>Auto-Fill from PVD PDF:</strong>{' '}
+                        {pdfBusy ? `${pdfBusy.stage} (${pdfBusy.pct}%)` : 'Upload or drop a UOBAM / TISCO PDF statement here.'}
+                    </div>
+                    <button
+                        type="button"
+                        disabled={Boolean(pdfBusy)}
+                        onClick={() => localPdfInputRef.current?.click()}
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            padding: '0.4rem 0.8rem',
+                            borderRadius: 'var(--radius-sm)',
+                            background: 'var(--color-primary)',
+                            color: '#fff',
+                            fontSize: '0.76rem',
+                            fontWeight: 700,
+                            opacity: pdfBusy ? 0.65 : 1
+                        }}
+                    >
+                        <FileUp size={14} />
+                        {verification ? 'Upload Another PDF' : 'Choose PDF File'}
+                    </button>
+                </div>
+
+                {pdfError && (
+                    <div style={{
+                        marginBottom: '1rem',
+                        padding: '0.75rem 0.9rem',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-danger-bg)',
+                        border: '1px solid var(--color-danger)',
+                        color: 'var(--color-danger)',
+                        fontSize: '0.8rem'
+                    }}>
+                        {pdfError}
+                    </div>
+                )}
+
+                {/* Math Verification & PDF Preview Banner */}
+                {verification && (
+                    <div style={{
+                        marginBottom: '1rem',
+                        padding: '0.85rem 1rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: `1px solid ${verification.isMathVerified ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.5)'}`,
+                        background: verification.isMathVerified ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.55rem'
+                    }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 700, fontSize: '0.84rem' }}>
+                                {verification.isMathVerified ? (
+                                    <CheckCircle2 size={16} color="#10b981" />
+                                ) : (
+                                    <AlertTriangle size={16} color="#f59e0b" />
+                                )}
+                                <span>
+                                    {verification.isMathVerified
+                                        ? 'All Statement Math Checks Passed'
+                                        : 'Please Double-Check Highlighted Figures'}
+                                </span>
+                                <span style={{
+                                    fontSize: '0.68rem',
+                                    padding: '0.12rem 0.45rem',
+                                    borderRadius: '999px',
+                                    background: 'var(--color-surface)',
+                                    border: '1px solid var(--color-border)',
+                                    color: 'var(--color-text-secondary)',
+                                    fontWeight: 600
+                                }}>
+                                    {verification.sourceMode === 'text-layer' ? 'Vector Text Layer' : 'OCR Scan Mode'}
+                                </span>
+                            </div>
+
+                            {previewUrl && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPdfPreview(v => !v)}
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.35rem',
+                                        padding: '0.3rem 0.65rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        background: 'var(--color-surface)',
+                                        border: '1px solid var(--color-border)',
+                                        color: 'var(--color-text-main)',
+                                        fontSize: '0.74rem',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    <Eye size={13} />
+                                    {showPdfPreview ? 'Hide PDF Page' : 'View PDF Page'}
+                                </button>
+                            )}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.75rem' }}>
+                            {verification.checks.map((chk, idx) => (
+                                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: chk.passed ? 'var(--color-text-main)' : '#d97706' }}>
+                                    {chk.passed ? <CheckCircle2 size={13} color="#10b981" /> : <AlertTriangle size={13} color="#f59e0b" />}
+                                    <strong>{chk.label}:</strong>
+                                    <span style={{ color: 'var(--color-text-secondary)' }}>{chk.detail}</span>
+                                </div>
+                            ))}
+                        </div>
+
+                        {verification.warnings.length > 0 && (
+                            <div style={{ fontSize: '0.73rem', color: '#b45309', paddingTop: '0.2rem' }}>
+                                {verification.warnings.map((w, i) => (
+                                    <div key={i}>• {w}</div>
+                                ))}
+                            </div>
+                        )}
+
+                        {showPdfPreview && previewUrl && (
+                            <div style={{
+                                marginTop: '0.4rem',
+                                maxHeight: '340px',
+                                overflow: 'auto',
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--color-border)',
+                                background: '#fff'
+                            }}>
+                                <img
+                                    src={previewUrl}
+                                    alt="Uploaded PVD PDF Statement Preview"
+                                    style={{ width: '100%', height: 'auto', display: 'block' }}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
                     {/* Period & Header Metadata */}
@@ -563,7 +810,7 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
 
                     {/* Footer Buttons */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginTop: '0.5rem' }}>
-                        {initialData && onDelete ? (
+                        {!isImportMode && initialData && onDelete ? (
                             <button
                                 type="button"
                                 onClick={handleDelete}
