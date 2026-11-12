@@ -10,9 +10,8 @@ import {
     FileUp,
     Eye
 } from 'lucide-react';
-import type { PVDRecord, PVDPolicy } from '../types';
+import type { PVDRecord, PVDPolicy, VerificationResult } from '../types';
 import { POLICY_METADATA } from '../utils/mockData';
-import { parsePVDStatementPDF, type VerificationResult } from '../utils/pdfStatementParser';
 
 interface DataEntryFormProps {
     onClose: () => void;
@@ -20,6 +19,7 @@ interface DataEntryFormProps {
     onDelete?: (id: string) => void;
     initialData?: PVDRecord;
     templateRecord?: PVDRecord;
+    existingIds?: string[];
     isPdfImport?: boolean;
     pdfVerification?: VerificationResult;
     pdfPreviewUrl?: string;
@@ -121,12 +121,31 @@ function toStatementDDMMYYYY(dateStr: string): string {
     return dateStr;
 }
 
+function normalizeToSixPolicies(list?: PVDPolicy[]): PVDPolicy[] {
+    if (!list || list.length === 0) return DEFAULT_POLICIES.map(p => ({ ...p }));
+    const byCode = new Map(list.map(p => [p.code, p]));
+    return DEFAULT_POLICIES.map(def => {
+        const found = byCode.get(def.code);
+        return found
+            ? { ...found }
+            : {
+                ...def,
+                planAllocation: 0,
+                actualPortion: 0,
+                units: 0,
+                ytdReturn: 0,
+                accReturn5Y: null
+            };
+    });
+}
+
 const DataEntryForm: React.FC<DataEntryFormProps> = ({
     onClose,
     onSubmit,
     onDelete,
     initialData,
     templateRecord,
+    existingIds = [],
     isPdfImport = false,
     pdfVerification,
     pdfPreviewUrl
@@ -148,6 +167,9 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
     const [planCode, setPlanCode] = useState<string>(initialData?.planCode || 'DIY');
     const [planName, setPlanName] = useState<string>(
         initialData?.planName || 'แผนกำหนดสัดส่วนการลงทุนด้วยตนเอง'
+    );
+    const [planNameTh, setPlanNameTh] = useState<string>(
+        initialData?.planNameTh || 'DIY สมาชิกเลือกสัดส่วนการลงทุนด้วยตนเอง (DIY)'
     );
     const localPdfInputRef = useRef<HTMLInputElement>(null);
 
@@ -185,10 +207,10 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
 
     const [policies, setPolicies] = useState<PVDPolicy[]>(() => {
         if (initialData?.policies && initialData.policies.length > 0) {
-            return initialData.policies.map(p => ({ ...p }));
+            return normalizeToSixPolicies(initialData.policies);
         }
         if (templateRecord?.policies && templateRecord.policies.length > 0) {
-            return templateRecord.policies.map(p => ({ ...p }));
+            return normalizeToSixPolicies(templateRecord.policies);
         }
         return DEFAULT_POLICIES.map(p => ({ ...p }));
     });
@@ -197,11 +219,15 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
         Boolean(pdfVerification && !pdfVerification.isMathVerified)
     );
 
+    const targetRecordId = `${year}-Q${quarter}`;
+    const willOverwriteExisting = isImportMode && existingIds.includes(targetRecordId);
+
     const handleInlinePdfSelected = async (file: File | undefined) => {
         if (!file) return;
         setPdfError(null);
-        setPdfBusy({ stage: 'Reading PDF...', pct: 5 });
+        setPdfBusy({ stage: 'Loading PDF parser...', pct: 5 });
         try {
+            const { parsePVDStatementPDF } = await import('../utils/pdfStatementParser');
             const parsed = await parsePVDStatementPDF(file, (stage, pct) => {
                 setPdfBusy({ stage, pct });
             });
@@ -221,11 +247,12 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
             setYtdEmpContrib(r.ytd?.employerContribution ?? 0);
             setYtdEmpEarn(r.ytd?.employerEarnings ?? 0);
             if (r.policies && r.policies.length > 0) {
-                setPolicies(r.policies.map(p => ({ ...p })));
+                setPolicies(normalizeToSixPolicies(r.policies));
             }
             setPrevYearData(r.prevYear);
             setPlanCode(r.planCode || 'DIY');
             setPlanName(r.planName || 'แผนกำหนดสัดส่วนการลงทุนด้วยตนเอง');
+            setPlanNameTh(r.planNameTh || 'DIY สมาชิกเลือกสัดส่วนการลงทุนด้วยตนเอง (DIY)');
             setVerification(parsed.verification);
             setPreviewUrl(parsed.previewDataUrl);
             setShowPoliciesSection(!parsed.verification.isMathVerified);
@@ -251,8 +278,8 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        const statementDate = toStatementDDMMYYYY(dateInput);
-        const [dd, mm, yyyy] = statementDate.split('/');
+        const statementDateDisplay = toStatementDDMMYYYY(dateInput);
+        const [dd, mm, yyyy] = statementDateDisplay.split('/');
         const thaiYear = year + 543;
         const statementDateThai = dd && mm && yyyy ? `${dd}/${mm}/${thaiYear}` : undefined;
 
@@ -263,7 +290,8 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
         const newRecord: PVDRecord = {
             ...initialData,
             id: isImportMode ? `${year}-Q${quarter}` : (initialData?.id || `${year}-Q${quarter}`),
-            statementDate,
+            statementDate: dateInput,
+            statementDateDisplay,
             statementDateThai,
             quarter,
             year,
@@ -271,6 +299,7 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
             documentNo,
             planCode,
             planName,
+            planNameTh,
             memberContribution,
             memberEarnings,
             employerContribution,
@@ -507,6 +536,20 @@ const DataEntryForm: React.FC<DataEntryFormProps> = ({
                                 {verification.warnings.map((w, i) => (
                                     <div key={i}>• {w}</div>
                                 ))}
+                            </div>
+                        )}
+
+                        {willOverwriteExisting && (
+                            <div style={{
+                                fontSize: '0.75rem',
+                                color: '#b45309',
+                                background: 'rgba(245, 158, 11, 0.14)',
+                                border: '1px solid rgba(245, 158, 11, 0.4)',
+                                padding: '0.45rem 0.65rem',
+                                borderRadius: 'var(--radius-sm)',
+                                fontWeight: 600
+                            }}>
+                                Note: Statement Q{quarter}/{year} ({targetRecordId}) already exists in your ledger — saving will overwrite the existing record.
                             </div>
                         )}
 

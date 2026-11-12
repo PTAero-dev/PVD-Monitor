@@ -81,4 +81,22 @@ export interface RetirementGoalConfig {
     targetAmount: number; // THB
 }
 
+export interface VerificationResult {
+    isMathVerified: boolean;
+    sourceMode: 'text-layer' | 'ocr-image';
+    checks: {
+        label: string;
+        passed: boolean;
+        detail: string;
+    }[];
+    warnings: string[];
+}
+
+export interface ParsedPDFStatementResult {
+    record: PVDRecord;
+    verification: VerificationResult;
+    previewDataUrl?: string;
+    rawRowsCount: number;
+}
+
 export type PVDHistory = PVDRecord[];

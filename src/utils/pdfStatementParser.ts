@@ -1,11 +1,18 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { createWorker, PSM } from 'tesseract.js';
-import type { PVDRecord, PVDPolicy, AccountMovementRow } from '../types';
+import type {
+    PVDRecord,
+    PVDPolicy,
+    AccountMovementRow,
+    VerificationResult,
+    ParsedPDFStatementResult
+} from '../types';
 import { POLICY_METADATA } from './mockData';
 
 // Configure pdf.js worker locally from Vite bundle
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+export type { VerificationResult, ParsedPDFStatementResult };
 
 export interface ParsedToken {
     text: string;
@@ -14,24 +21,6 @@ export interface ParsedToken {
     x1: number;
     y1: number;
     confidence?: number;
-}
-
-export interface VerificationResult {
-    isMathVerified: boolean;
-    sourceMode: 'text-layer' | 'ocr-image';
-    checks: {
-        label: string;
-        passed: boolean;
-        detail: string;
-    }[];
-    warnings: string[];
-}
-
-export interface ParsedPDFStatementResult {
-    record: PVDRecord;
-    verification: VerificationResult;
-    previewDataUrl?: string;
-    rawRowsCount: number;
 }
 
 const POLICY_ORDER = [
@@ -44,7 +33,11 @@ const POLICY_ORDER = [
 ] as const;
 
 function parseNumberToken(raw: string): number | null {
+    // Support standard minus signs as well as legacy 2020-2021 PDF custom font encoding
+    // where leading minus '-' is mapped to 'Y' or 'B' (e.g., "Y27.20", "Y1,784.23", "B13.88 %")
     const cleaned = raw
+        .trim()
+        .replace(/^[YB](?=\d)/, '-')
         .replace(/,/g, '')
         .replace(/%/g, '')
         .replace(/[–—]/g, '-')
@@ -57,8 +50,9 @@ function parseNumberToken(raw: string): number | null {
 
 function normalizePolicyCode(rowText: string): string | null {
     const upper = rowText.toUpperCase().replace(/\s+/g, '');
-    // Handle minor OCR confusions like AER01-U0B -> AERO1-UOB
+    // Handle minor OCR confusions (AER01-U0B) and legacy 2020 font hyphen encoding (AERO1YUOB / AERO1BUOB)
     const normalized = upper
+        .replace(/AER[O0]([123])[YB–—-]?(U[O0]B|T[I1]S)/g, 'AERO$1-$2')
         .replace(/AER[O0]([123])/g, 'AERO$1')
         .replace(/U[O0]B/g, 'UOB')
         .replace(/T[I1]S/g, 'TIS');
@@ -99,7 +93,10 @@ function groupTokensIntoRows(tokens: ParsedToken[], yTolerance: number): ParsedT
 /**
  * Merge separated minus signs (e.g. '-' followed closely by '27.20') and extract numeric values left-to-right.
  */
-function extractNumericCellsFromRow(tokens: ParsedToken[], minX = 0): { value: number; xMid: number }[] {
+function extractNumericCellsFromRow(
+    tokens: ParsedToken[],
+    minX = 0
+): { value: number; rawText: string; xMid: number }[] {
     const filtered = tokens.filter((t) => t.x0 >= minX);
     const merged: { text: string; xMid: number }[] = [];
 
@@ -107,7 +104,11 @@ function extractNumericCellsFromRow(tokens: ParsedToken[], minX = 0): { value: n
         const cur = filtered[i].text.trim();
         const next = filtered[i + 1]?.text.trim();
 
-        if ((cur === '-' || cur === '–' || cur === '—') && next && /^\d[\d,]*(\.\d+)?%?$/.test(next)) {
+        if (
+            (cur === '-' || cur === '–' || cur === '—' || cur === 'Y' || cur === 'B') &&
+            next &&
+            /^\d[\d,]*(\.\d+)?%?$/.test(next)
+        ) {
             const xMid = (filtered[i + 1].x0 + filtered[i + 1].x1) / 2;
             merged.push({ text: `-${next}`, xMid });
             i++;
@@ -119,14 +120,41 @@ function extractNumericCellsFromRow(tokens: ParsedToken[], minX = 0): { value: n
         });
     }
 
-    const results: { value: number; xMid: number }[] = [];
+    const results: { value: number; rawText: string; xMid: number }[] = [];
     for (const item of merged) {
         const parsed = parseNumberToken(item.text);
         if (parsed !== null) {
-            results.push({ value: parsed, xMid: item.xMid });
+            results.push({ value: parsed, rawText: item.text, xMid: item.xMid });
         }
     }
     return results;
+}
+
+/**
+ * Anchor policy row extraction on the 4-decimal NAV & Units columns so stray OCR tokens
+ * in the Thai description column cannot shift numeric columns.
+ */
+function extractPolicyNumbersFromRow(row: ParsedToken[], pageWidth: number): number[] {
+    const codeTokIdx = row.findIndex(
+        (t) => normalizePolicyCode(t.text) !== null || /AERO|UOB|TIS/i.test(t.text)
+    );
+    const minX = Math.max(
+        pageWidth * 0.36,
+        codeTokIdx >= 0 ? row[codeTokIdx].x1 - 5 : pageWidth * 0.36
+    );
+    const cells = extractNumericCellsFromRow(row, minX);
+    if (cells.length < 5) return cells.map((c) => c.value);
+
+    // Find the first index where two consecutive numbers look like 4-decimal NAV and Units
+    const fourDecIdx = cells.findIndex(
+        (c, idx) =>
+            idx + 4 < cells.length &&
+            /\.\d{3,4}$/.test(c.rawText.replace(/,/g, '')) &&
+            /\.\d{3,4}$/.test(cells[idx + 1].rawText.replace(/,/g, ''))
+    );
+
+    const startIdx = fourDecIdx >= 0 ? fourDecIdx : 0;
+    return cells.slice(startIdx).map((c) => c.value);
 }
 
 function buildMovementRow(nums: number[]): AccountMovementRow | undefined {
@@ -184,13 +212,14 @@ function verifyPVDRecordMath(record: PVDRecord, sourceMode: 'text-layer' | 'ocr-
     }
 
     // Check 3: Policies Market Value Sum vs Total Balance
-    if (record.policies && record.policies.length > 0) {
-        const policyMarketSum = record.policies.reduce((s, p) => s + p.nav * p.units, 0);
+    const activePolicies = (record.policies || []).filter((p) => p.units > 0 || p.planAllocation > 0);
+    if (activePolicies.length > 0) {
+        const policyMarketSum = activePolicies.reduce((s, p) => s + p.nav * p.units, 0);
         const diffPol = Math.abs(policyMarketSum - record.totalBalance);
         // Allow small rounding difference from 4-decimal NAV/Units
         const polMatches = record.totalBalance > 0 && diffPol <= Math.max(50, record.totalBalance * 0.002);
         checks.push({
-            label: `${record.policies.length} Sub-Fund Policies (NAV × Units)`,
+            label: `${activePolicies.length} Sub-Fund Policies (NAV × Units)`,
             passed: polMatches,
             detail: polMatches
                 ? `฿${policyMarketSum.toLocaleString('en-US', { minimumFractionDigits: 2 })} matches Total Balance`
@@ -254,35 +283,19 @@ function parseRowsToPVDRecord(
     const statementDateDisplay = `${ddStr}/${mmStr}/${year}`;
     const statementDateThai = `${ddStr}/${mmStr}/${thaiYear}`;
 
-    // 3. Plan Code / Name
-    let planCode = 'DIY';
-    let planName = 'DIY (Self-Directed Allocation)';
-    let planNameTh = 'DIY สมาชิกเลือกสัดส่วนการลงทุนด้วยตนเอง (DIY)';
-    if (/Plan\s*7|แผนที่\s*7/i.test(fullText)) {
-        planCode = 'Plan 7';
-        planName = 'Plan 7 (Fixed Income 40%, Mixed 60%)';
-        planNameTh = 'แผนที่ 7 นโยบายตราสารหนี้ 40% และนโยบายผสม 60%';
-    } else if (/DIY/i.test(fullText)) {
-        planCode = 'DIY';
-    }
-
-    // 4. Parse 6 Sub-Fund Policy Rows
-    const policies: PVDPolicy[] = [];
+    // 3. Parse Sub-Fund Policy Rows (4 policies in 2020-2021 Q2, 6 policies in 2021 Q3+)
+    const extractedPoliciesMap = new Map<string, PVDPolicy>();
     for (const row of rows) {
         const rowStr = row.map((t) => t.text).join(' ');
         const code = normalizePolicyCode(rowStr);
-        if (!code || policies.some((p) => p.code === code)) continue;
+        if (!code || extractedPoliciesMap.has(code)) continue;
 
         const meta = POLICY_METADATA[code];
         if (!meta) continue;
 
-        // Extract numeric columns strictly left-to-right after policy code token
-        const codeTokIdx = row.findIndex((t) => normalizePolicyCode(t.text) !== null || /AERO|UOB|TIS/i.test(t.text));
-        const minX = codeTokIdx >= 0 ? row[codeTokIdx].x1 - 5 : pageWidth * 0.35;
-        const nums = extractNumericCellsFromRow(row, minX).map((n) => n.value);
-
+        const nums = extractPolicyNumbersFromRow(row, pageWidth);
         if (nums.length >= 5) {
-            policies.push({
+            extractedPoliciesMap.set(code, {
                 code,
                 nameTh: meta.nameTh.replace(/\s*\(.*\)$/, ''),
                 manager: meta.manager,
@@ -297,11 +310,26 @@ function parseRowsToPVDRecord(
         }
     }
 
-    // Build descriptive DIY plan summary from extracted policy planAllocations
-    if (planCode === 'DIY' && policies.length > 0) {
-        const fi = policies.filter((p) => p.category === 'Fixed Income').reduce((s, p) => s + p.planAllocation, 0);
-        const mx = policies.filter((p) => p.category === 'Mixed').reduce((s, p) => s + p.planAllocation, 0);
-        const eq = policies.filter((p) => p.category === 'Foreign Equity').reduce((s, p) => s + p.planAllocation, 0);
+    const policies: PVDPolicy[] = Array.from(extractedPoliciesMap.values());
+
+    // 4. Plan Code / Name (infer Plan 7 vs DIY from text or 40/60 Fixed Income + Mixed allocation)
+    let planCode = 'DIY';
+    let planName = 'DIY (Self-Directed Allocation)';
+    let planNameTh = 'DIY สมาชิกเลือกสัดส่วนการลงทุนด้วยตนเอง (DIY)';
+
+    const fi = policies.filter((p) => p.category === 'Fixed Income').reduce((s, p) => s + p.planAllocation, 0);
+    const mx = policies.filter((p) => p.category === 'Mixed').reduce((s, p) => s + p.planAllocation, 0);
+    const eq = policies.filter((p) => p.category === 'Foreign Equity').reduce((s, p) => s + p.planAllocation, 0);
+
+    const isPlan7Text = /Plan\s*7|แผนที.*7|นโยบายตราสารหนี.*และนโยบายผสม/i.test(fullText);
+    const isPlan7Alloc = !/DIY/i.test(fullText) && Math.round(fi) === 40 && Math.round(mx) === 60 && Math.round(eq) === 0;
+
+    if (isPlan7Text || isPlan7Alloc) {
+        planCode = 'Plan 7';
+        planName = 'Plan 7 (Fixed Income 40%, Mixed 60%)';
+        planNameTh = 'แผนที่ 7 นโยบายตราสารหนี้ 40% และนโยบายผสม 60%';
+    } else if (policies.length > 0) {
+        planCode = 'DIY';
         planName = `DIY (Fixed Income ${Math.round(fi)}%, Mixed ${Math.round(mx)}%, Foreign Equity ${Math.round(eq)}%)`;
     }
 
@@ -310,7 +338,7 @@ function parseRowsToPVDRecord(
     for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const rowStr = row.map((t) => t.text).join(' ');
-        if (/i\s*[-–—]?\s*Return/i.test(rowStr) || /อัตราผลตอบแทนของสมาชิกกองทุน/i.test(rowStr)) {
+        if (/i\s*[-–—YB]?\s*Return/i.test(rowStr) || /อัตราผลตอบแทนของสมาชิกกองทุน/i.test(rowStr)) {
             const candidateRows = [row];
             if (i > 0) candidateRows.push(rows[i - 1]);
             for (const cand of candidateRows) {
@@ -333,7 +361,6 @@ function parseRowsToPVDRecord(
     }
 
     // 6. Parse Lower Account Movement Table Rows
-    // Note: in vector PDFs, the 5 figures sit on the Thai label line while the English label sits ~7pt below.
     let prevYear: AccountMovementRow | undefined;
     let ytd: AccountMovementRow | undefined;
     let endingRow: AccountMovementRow | undefined;
@@ -410,6 +437,23 @@ function parseRowsToPVDRecord(
     return { record, verification };
 }
 
+async function renderPageToCanvas(
+    page: pdfjsLib.PDFPageProxy,
+    targetWidth: number
+): Promise<HTMLCanvasElement> {
+    const baseViewport = page.getViewport({ scale: 1 });
+    const scale = targetWidth / baseViewport.width;
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+        await page.render({ canvasContext: ctx, canvas, viewport }).promise;
+    }
+    return canvas;
+}
+
 /**
  * Parse an uploaded UOBAM x TISCO PVD Statement PDF (supports both text-layer and image-only PDFs).
  */
@@ -423,37 +467,11 @@ export async function parsePVDStatementPDF(
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     const page = await pdf.getPage(1);
 
-    // First inspect text layer
-    onProgress?.('Inspecting PDF text layer...', 22);
+    // 1. Inspect embedded text layer FIRST before rendering any heavy canvas
+    onProgress?.('Inspecting PDF text layer...', 25);
     const textContent = await page.getTextContent();
     const baseViewport = page.getViewport({ scale: 1 });
 
-    // Render thumbnail / high-res canvas (used for preview and OCR if image-only PDF)
-    const targetWidth = 2200;
-    const scale = targetWidth / baseViewport.width;
-    const viewport = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(viewport.width);
-    canvas.height = Math.round(viewport.height);
-    const ctx = canvas.getContext('2d');
-    let previewDataUrl: string | undefined;
-
-    if (ctx) {
-        onProgress?.('Rendering statement page...', 35);
-        await page.render({ canvasContext: ctx, canvas, viewport }).promise;
-        // Create lighter thumbnail preview for UI verification
-        const thumbCanvas = document.createElement('canvas');
-        const thumbScale = 900 / canvas.width;
-        thumbCanvas.width = 900;
-        thumbCanvas.height = Math.round(canvas.height * thumbScale);
-        const tCtx = thumbCanvas.getContext('2d');
-        if (tCtx) {
-            tCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
-            previewDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.85);
-        }
-    }
-
-    // Check if embedded text layer has real statement keywords
     type PdfTextItemLike = (typeof textContent.items)[number] & {
         str: string;
         transform: number[];
@@ -471,9 +489,13 @@ export async function parsePVDStatementPDF(
         (/AERO[123]/i.test(combinedRawText) || /Balance\s+from\s+previous\s+year/i.test(combinedRawText));
 
     if (hasRichTextLayer) {
-        onProgress?.('Extracting structured text coordinates...', 75);
+        // Render only a lightweight 900px preview image (saves ~6x memory & CPU on mobile/tablet)
+        onProgress?.('Rendering statement preview...', 50);
+        const previewCanvas = await renderPageToCanvas(page, 900);
+        const previewDataUrl = previewCanvas.toDataURL('image/jpeg', 0.85);
+
+        onProgress?.('Extracting structured text coordinates...', 80);
         const tokens: ParsedToken[] = rawItems.map((item) => {
-            // PDF origin is bottom-left; flip Y to top-down
             const x0 = item.transform[4];
             const yBottom = item.transform[5];
             const yTop = baseViewport.height - yBottom;
@@ -496,8 +518,23 @@ export async function parsePVDStatementPDF(
         return { record, verification, previewDataUrl, rawRowsCount: rows.length };
     }
 
-    // Image-only PDF (2024 Q2 – 2026 Q3+): Run on-device Tesseract OCR with bounding boxes
-    onProgress?.('Initializing on-device OCR engine...', 45);
+    // 2. Image-only / Scanned PDF fallback: render 2200px canvas & lazy-load Tesseract OCR
+    onProgress?.('Rendering high-resolution page for OCR...', 35);
+    const canvas = await renderPageToCanvas(page, 2200);
+
+    const thumbCanvas = document.createElement('canvas');
+    const thumbScale = 900 / canvas.width;
+    thumbCanvas.width = 900;
+    thumbCanvas.height = Math.round(canvas.height * thumbScale);
+    const tCtx = thumbCanvas.getContext('2d');
+    let previewDataUrl: string | undefined;
+    if (tCtx) {
+        tCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+        previewDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.85);
+    }
+
+    onProgress?.('Initializing on-device OCR engine...', 48);
+    const { createWorker, PSM } = await import('tesseract.js');
     const worker = await createWorker('eng', undefined, {
         logger: (m) => {
             if (m.status === 'recognizing text') {

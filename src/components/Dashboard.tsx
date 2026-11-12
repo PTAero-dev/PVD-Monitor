@@ -59,8 +59,7 @@ import {
     resetCloudToOfficialStatements,
     loadMemberProfileFromCloud
 } from '../utils/firebase';
-import { parsePVDStatementPDF, type VerificationResult } from '../utils/pdfStatementParser';
-import type { PVDRecord, MemberProfile } from '../types';
+import type { PVDRecord, MemberProfile, VerificationResult } from '../types';
 
 interface DashboardProps {
     activeTab: NavTab;
@@ -503,6 +502,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         });
 
         try {
+            const { parsePVDStatementPDF } = await import('../utils/pdfStatementParser');
             const parsed = await parsePVDStatementPDF(file, (stage, pct) => {
                 setPdfParseProgress({ fileName: file.name, stage, pct });
             });
@@ -1424,6 +1424,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <DataEntryForm
                     initialData={editingRecord}
                     templateRecord={latestRecord}
+                    existingIds={enrichedData.map(r => r.id)}
                     isPdfImport={pdfImportState?.isPdfImport}
                     pdfVerification={pdfImportState?.verification}
                     pdfPreviewUrl={pdfImportState?.previewDataUrl}
